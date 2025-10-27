@@ -1,0 +1,16 @@
+# Terraform-specific files to ignore
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+.terraformrc
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Node.js/NPM files (if your React app is here)
+node_modules/
+build/
+dist/
