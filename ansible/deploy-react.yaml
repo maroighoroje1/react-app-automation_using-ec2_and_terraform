@@ -1,0 +1,120 @@
+---
+# Play 1: Wait for SSH Connection to be fully ready
+- name: Wait for SSH connection
+  hosts: all
+  gather_facts: False
+  tasks:
+    - name: Wait for host to be ready
+      ansible.builtin.wait_for_connection:
+        timeout: 180 
+        delay: 10
+        
+# -------------------------------------------------------------
+
+# Play 2: Deploy React App on EC2
+- name: Deploy React App on EC2
+  hosts: all
+  become: yes
+  vars:
+    local_react_path: "/home/breezi/react-nodejs-example/my-app"
+    remote_app_path: "/home/ubuntu/my-app"
+    deploy_path: "/var/www/reactapp"
+  
+  tasks:
+    - name: Wait for cloud-init to finish
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        state: present
+        timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        force_apt_get: yes
+        cache_valid_time: 3600
+
+    - name: Install dependencies (Nginx, Node.js, npm)
+      apt:
+        name:
+          - nginx
+          - nodejs
+          - npm
+        state: present
+
+    - name: Start and enable Nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Copy React project from local to server
+      copy:
+        src: "{{ local_react_path }}/"
+        dest: "{{ remote_app_path }}/"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Install project dependencies (npm install)
+      npm:
+        path: "{{ remote_app_path }}"
+      become_user: ubuntu
+
+    - name: Build React app
+      shell: npm run build
+      args:
+        chdir: "{{ remote_app_path }}"
+      # Removed the problematic 'environment' block here
+      become_user: ubuntu
+
+    - name: Ensure deployment directory exists
+      file:
+        path: "{{ deploy_path }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Copy build files to Nginx web root
+      copy:
+        src: "{{ remote_app_path }}/build/"
+        dest: "{{ deploy_path }}/"
+        owner: www-data
+        group: www-data
+        mode: "0755"
+        remote_src: yes # Source is on the remote server
+
+    - name: Configure Nginx for React
+      copy:
+        dest: /etc/nginx/sites-available/reactapp
+        content: |
+          server {
+            listen 80;
+            server_name _;
+            root {{ deploy_path }};
+            index index.html;
+            
+            location / {
+              try_files $uri $uri/ /index.html;
+            }
+          }
+      notify: Restart Nginx
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/reactapp
+        dest: /etc/nginx/sites-enabled/reactapp
+        state: link
+      notify: Restart Nginx
+
+    - name: Disable default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Restart Nginx
+
+  handlers:
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
